@@ -19,7 +19,12 @@ iDESC(
   cores = 1,
   zi_model = c("none", "constant"),
   pairwise = TRUE,
-  fit_stats = FALSE
+  fit_stats = FALSE,
+  permutation = c("auto", "yes", "no"),
+  min_subjects_asymptotic = 10,
+  n_permutations = 999,
+  seed = 1,
+  sequential = TRUE
 )
 }
 \arguments{
@@ -64,6 +69,20 @@ A, A being the earlier factor level), its Wald p-value \verb{Pval_Beta_<B>_vs_<A
 covariance matrix of the fixed effects) and \verb{FDR_Beta_<B>_vs_<A>}. Ignored with two levels.}
 
 \item{fit_stats}{If \code{TRUE}, adds the columns \code{LogLik}, \code{Npar} and \code{AIC} of the fitted model.}
+
+\item{permutation}{\code{"auto"} (default) computes permutation p-values when the smallest group has
+fewer than \code{min_subjects_asymptotic} subjects; \code{"yes"} always; \code{"no"} never. See the section
+Permutation test.}
+
+\item{min_subjects_asymptotic}{Number of subjects in the smallest group from which the
+asymptotic p-values are considered enough by \code{permutation = "auto"} (default 10).}
+
+\item{n_permutations}{Number of permutations (default 999).}
+
+\item{seed}{Seed used to generate the permutations (default 1).}
+
+\item{sequential}{If \code{TRUE} (default), genes that are clearly not significant after the first
+99 permutations are not permuted further. See the section Permutation test.}
 }
 \value{
 A list containing:
@@ -73,7 +92,10 @@ A list containing:
 for every coefficient of the group (\verb{group<level>}) and of the covariates \verb{Beta_<coef>},
 \verb{Pval_Beta_<coef>} (Wald) and \verb{FDR_Beta_<coef>}; the pairwise contrasts (see \code{pairwise});
 \code{LRT_stat}, \code{Pval_LRT_group} and \code{FDR_LRT_group} (likelihood-ratio test of the whole group
-effect, chi-square with one degree of freedom per group coefficient); \code{Dispersion}
+effect, chi-square with one degree of freedom per group coefficient); when the permutation
+test is used, \code{Pval_perm_group}, \code{FDR_perm_group}, \verb{Pval_perm_Beta_<contrast>} and
+\verb{FDR_perm_Beta_<contrast>} for every group coefficient and pairwise contrast, and \code{N_perm};
+\code{Dispersion}
 (1 / negative binomial size parameter); \code{Sigma2} (variance of the subject random intercept);
 \code{Theta} (zero-inflation intercept, \code{NA} for \code{zi_model = "none"}); \code{Minus2LogLik}
 (-2 x maximised log-likelihood of the full model) and, with \code{fit_stats = TRUE}, \code{LogLik},
@@ -86,8 +108,13 @@ status is not \code{ok}: number of cells with non-zero expression in each group 
 \item{\strong{total_cells}: A one-row data frame with the number of cells per group after
 filtering.}
 \item{\strong{gene_status}: A data frame with one row per input gene (row of \code{mat}) and the
-columns \code{gene}, \code{status}, \code{convergence}, \code{pdHess}, \code{convergence_null} and \code{message}
-(see the section Gene status).}
+columns \code{gene}, \code{status}, \code{convergence}, \code{pdHess}, \code{convergence_null}, \code{n_perm_failed}
+(number of permutations that were run but not valid; \code{NA} without permutation test) and
+\code{message} (see the section Gene status).}
+\item{\strong{permutation}: A list describing the permutation test: \code{used},
+\code{subjects_per_group} and, when used, \code{n_permutations} (permutations available per gene),
+\code{n_permutations_requested}, \code{exhaustive}, \code{n_arrangements}, \code{seed}, \code{sequential},
+\code{first_block}, \code{continue_below} and \code{genes_all_permutations} (genes that were not stopped).}
 }
 The log-likelihoods are the maximised values reported by the optimizer
 (\code{-fit$fit$objective}), which are available even when the Hessian is not positive definite
@@ -98,6 +125,8 @@ For every gene a negative binomial mixed model with the subject as random interc
 with \code{glmmTMB}: \code{y ~ group + covariates + offset(log(norm_sf)) + (1 | sub)}. The group effect is
 tested with a likelihood-ratio test (full model against the same model without \code{group}), and
 every group coefficient (and, optionally, every remaining pairwise contrast) with a Wald test.
+With few subjects per group the asymptotic p-values are too small, and permutation p-values
+(group label permuted between subjects) are computed as well.
 }
 \section{Model}{
 
@@ -105,6 +134,48 @@ every group coefficient (and, optionally, every remaining pairwise contrast) wit
 (\code{ziformula = ~ 0}). \code{zi_model = "constant"} adds one zero-inflation probability per gene
 (\code{ziformula = ~ 1}). The zero-inflation formula of iDESC <= 0.2.0
 (\code{~ offset(predict_pi_offset) - 1 + ind_zero + (1 | sub)}) was removed in 0.3.0, see \code{NEWS.md}.
+}
+
+\section{Permutation test}{
+
+The asymptotic likelihood-ratio and Wald p-values rely on the number of subjects being large;
+with a handful of subjects per group they are anti-conservative. With \code{permutation = "yes"}, or
+\code{permutation = "auto"} and fewer than \code{min_subjects_asymptotic} subjects in the smallest group,
+permutation p-values are added:
+\itemize{
+\item The group label is permuted \emph{between subjects}: every subject keeps its cells and
+its covariates, and the number of subjects per group is kept. Therefore every subject must
+belong to one group and every covariate must be constant within subject (otherwise \code{iDESC()}
+stops with an error; use \code{permutation = "no"} for such designs).
+\item The same \code{n_permutations} arrangements, generated from \code{seed}, are used for every gene,
+so the result is reproducible and does not depend on \code{cores}. The global random number
+stream is left untouched.
+\item The null model does not depend on the labels and is fitted once per gene; for every
+permutation only the full model is fitted again. Statistics: the likelihood-ratio statistic
+for the group effect (\code{Pval_perm_group}) and the absolute value of the estimate of every group
+contrast, i.e. the coefficients against the reference level and the pairwise contrasts
+(\code{Pval_perm_Beta_...}).
+\item p-value = (1 + number of valid permutations with statistic >= observed) /
+(1 + number of valid permutations). A permuted fit that fails, has a non-finite
+log-likelihood or ends below the null model is not valid: it is not counted, and the number
+of such fits is reported in \code{gene_status$n_perm_failed}. \code{N_perm} is the number of valid
+permutations behind the p-values of the gene.
+\item Sequential stopping (\code{sequential = TRUE}): a first block of 99 permutations is run for
+all genes; the remaining ones are run only for the genes whose permutation p-value of the
+group effect or of any contrast is below 0.1 after the first block. Genes that stop keep
+their 99-permutation p-values: these have a resolution of 0.01 and are all >= 0.1 for every
+statistic considered, so decisions at an FDR (or p-value) threshold of 0.05 are the same as
+without stopping, up to the Monte Carlo error of the first block.
+\item If the number of distinct arrangements of the labels other than the observed one is not
+larger than \code{n_permutations}, all of them are used (exact test) and a warning reports the
+smallest possible p-value.
+\item The smallest possible p-value is 1 / (\code{n_permutations} + 1). With \code{m} genes tested, a
+single gene can only reach a BH FDR below 0.05 when \code{n_permutations} >= 20 x \code{m}; a message
+is shown when this is not the case.
+}
+Permuting labels between subjects is exact when the subjects are exchangeable under the null
+hypothesis; covariates stay with their subject, so the test is approximate when the covariates
+are strongly unbalanced between the groups.
 }
 
 \section{Gene status}{
@@ -124,7 +195,9 @@ only in \code{gene_status}.}
 }
 The optimizer convergence code and the positive-definite-Hessian flag are not folded into the
 status: they are the columns \code{convergence} (0 = converged), \code{pdHess} and \code{convergence_null}
-(null model of the likelihood-ratio test) of \code{gene_status}.
+(null model of the likelihood-ratio test) of \code{gene_status}. A full model that fails or ends
+with a lower likelihood than the null model is fitted once more starting from the null
+estimates (the better fit is kept).
 }
 
 \examples{

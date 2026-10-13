@@ -4,12 +4,54 @@
 #' with `glmmTMB`: `y ~ group + covariates + offset(log(norm_sf)) + (1 | sub)`. The group effect is
 #' tested with a likelihood-ratio test (full model against the same model without `group`), and
 #' every group coefficient (and, optionally, every remaining pairwise contrast) with a Wald test.
+#' With few subjects per group the asymptotic p-values are too small, and permutation p-values
+#' (group label permuted between subjects) are computed as well.
 #'
 #' @section Model:
 #' `zi_model = "none"` (default) fits the negative binomial mixed model without zero inflation
 #' (`ziformula = ~ 0`). `zi_model = "constant"` adds one zero-inflation probability per gene
 #' (`ziformula = ~ 1`). The zero-inflation formula of iDESC <= 0.2.0
 #' (`~ offset(predict_pi_offset) - 1 + ind_zero + (1 | sub)`) was removed in 0.3.0, see `NEWS.md`.
+#'
+#' @section Permutation test:
+#' The asymptotic likelihood-ratio and Wald p-values rely on the number of subjects being large;
+#' with a handful of subjects per group they are anti-conservative. With `permutation = "yes"`, or
+#' `permutation = "auto"` and fewer than `min_subjects_asymptotic` subjects in the smallest group,
+#' permutation p-values are added:
+#' \itemize{
+#'   \item The group label is permuted \emph{between subjects}: every subject keeps its cells and
+#'   its covariates, and the number of subjects per group is kept. Therefore every subject must
+#'   belong to one group and every covariate must be constant within subject (otherwise `iDESC()`
+#'   stops with an error; use `permutation = "no"` for such designs).
+#'   \item The same `n_permutations` arrangements, generated from `seed`, are used for every gene,
+#'   so the result is reproducible and does not depend on `cores`. The global random number
+#'   stream is left untouched.
+#'   \item The null model does not depend on the labels and is fitted once per gene; for every
+#'   permutation only the full model is fitted again. Statistics: the likelihood-ratio statistic
+#'   for the group effect (`Pval_perm_group`) and the absolute value of the estimate of every group
+#'   contrast, i.e. the coefficients against the reference level and the pairwise contrasts
+#'   (`Pval_perm_Beta_...`).
+#'   \item p-value = (1 + number of valid permutations with statistic >= observed) /
+#'   (1 + number of valid permutations). A permuted fit that fails, has a non-finite
+#'   log-likelihood or ends below the null model is not valid: it is not counted, and the number
+#'   of such fits is reported in `gene_status$n_perm_failed`. `N_perm` is the number of valid
+#'   permutations behind the p-values of the gene.
+#'   \item Sequential stopping (`sequential = TRUE`): a first block of 99 permutations is run for
+#'   all genes; the remaining ones are run only for the genes whose permutation p-value of the
+#'   group effect or of any contrast is below 0.1 after the first block. Genes that stop keep
+#'   their 99-permutation p-values: these have a resolution of 0.01 and are all >= 0.1 for every
+#'   statistic considered, so decisions at an FDR (or p-value) threshold of 0.05 are the same as
+#'   without stopping, up to the Monte Carlo error of the first block.
+#'   \item If the number of distinct arrangements of the labels other than the observed one is not
+#'   larger than `n_permutations`, all of them are used (exact test) and a warning reports the
+#'   smallest possible p-value.
+#'   \item The smallest possible p-value is 1 / (`n_permutations` + 1). With `m` genes tested, a
+#'   single gene can only reach a BH FDR below 0.05 when `n_permutations` >= 20 x `m`; a message
+#'   is shown when this is not the case.
+#' }
+#' Permuting labels between subjects is exact when the subjects are exchangeable under the null
+#' hypothesis; covariates stay with their subject, so the test is approximate when the covariates
+#' are strongly unbalanced between the groups.
 #'
 #' @section Gene status:
 #' There is one status vocabulary, used in the `Status` column of `model_results`, in the `status`
@@ -27,7 +69,9 @@
 #' }
 #' The optimizer convergence code and the positive-definite-Hessian flag are not folded into the
 #' status: they are the columns `convergence` (0 = converged), `pdHess` and `convergence_null`
-#' (null model of the likelihood-ratio test) of `gene_status`.
+#' (null model of the likelihood-ratio test) of `gene_status`. A full model that fails or ends
+#' with a lower likelihood than the null model is fitted once more starting from the null
+#' estimates (the better fit is kept).
 #'
 #' @param mat Count matrix (genes x cells) with gene names as row names and cell names as column
 #' names
@@ -56,6 +100,15 @@
 #' A, A being the earlier factor level), its Wald p-value `Pval_Beta_<B>_vs_<A>` (from the
 #' covariance matrix of the fixed effects) and `FDR_Beta_<B>_vs_<A>`. Ignored with two levels.
 #' @param fit_stats If `TRUE`, adds the columns `LogLik`, `Npar` and `AIC` of the fitted model.
+#' @param permutation `"auto"` (default) computes permutation p-values when the smallest group has
+#' fewer than `min_subjects_asymptotic` subjects; `"yes"` always; `"no"` never. See the section
+#' Permutation test.
+#' @param min_subjects_asymptotic Number of subjects in the smallest group from which the
+#' asymptotic p-values are considered enough by `permutation = "auto"` (default 10).
+#' @param n_permutations Number of permutations (default 999).
+#' @param seed Seed used to generate the permutations (default 1).
+#' @param sequential If `TRUE` (default), genes that are clearly not significant after the first
+#' 99 permutations are not permuted further. See the section Permutation test.
 #'
 #' @return A list containing:
 #' \itemize{
@@ -64,7 +117,10 @@
 #'   for every coefficient of the group (`group<level>`) and of the covariates `Beta_<coef>`,
 #'   `Pval_Beta_<coef>` (Wald) and `FDR_Beta_<coef>`; the pairwise contrasts (see `pairwise`);
 #'   `LRT_stat`, `Pval_LRT_group` and `FDR_LRT_group` (likelihood-ratio test of the whole group
-#'   effect, chi-square with one degree of freedom per group coefficient); `Dispersion`
+#'   effect, chi-square with one degree of freedom per group coefficient); when the permutation
+#'   test is used, `Pval_perm_group`, `FDR_perm_group`, `Pval_perm_Beta_<contrast>` and
+#'   `FDR_perm_Beta_<contrast>` for every group coefficient and pairwise contrast, and `N_perm`;
+#'   `Dispersion`
 #'   (1 / negative binomial size parameter); `Sigma2` (variance of the subject random intercept);
 #'   `Theta` (zero-inflation intercept, `NA` for `zi_model = "none"`); `Minus2LogLik`
 #'   (-2 x maximised log-likelihood of the full model) and, with `fit_stats = TRUE`, `LogLik`,
@@ -77,8 +133,13 @@
 #'   \item{\strong{total_cells}: A one-row data frame with the number of cells per group after
 #'   filtering.}
 #'   \item{\strong{gene_status}: A data frame with one row per input gene (row of `mat`) and the
-#'   columns `gene`, `status`, `convergence`, `pdHess`, `convergence_null` and `message`
-#'   (see the section Gene status).}
+#'   columns `gene`, `status`, `convergence`, `pdHess`, `convergence_null`, `n_perm_failed`
+#'   (number of permutations that were run but not valid; `NA` without permutation test) and
+#'   `message` (see the section Gene status).}
+#'   \item{\strong{permutation}: A list describing the permutation test: `used`,
+#'   `subjects_per_group` and, when used, `n_permutations` (permutations available per gene),
+#'   `n_permutations_requested`, `exhaustive`, `n_arrangements`, `seed`, `sequential`,
+#'   `first_block`, `continue_below` and `genes_all_permutations` (genes that were not stopped).}
 #' }
 #' The log-likelihoods are the maximised values reported by the optimizer
 #' (`-fit$fit$objective`), which are available even when the Hessian is not positive definite
@@ -101,9 +162,16 @@ iDESC <- function(mat, meta, subject_var, group_var,
                   norm_opt = c("SeqDepth", "SizeFactor", "User", "None"), user_sf = NULL,
                   sub_cell_filtering = 5, gene_sub_filtering = 0, gene_cell_filtering = 0.05,
                   ncell_filtering = 1, covariates = NULL, cores = 1,
-                  zi_model = c("none", "constant"), pairwise = TRUE, fit_stats = FALSE) {
+                  zi_model = c("none", "constant"), pairwise = TRUE, fit_stats = FALSE,
+                  permutation = c("auto", "yes", "no"), min_subjects_asymptotic = 10,
+                  n_permutations = 999, seed = 1, sequential = TRUE) {
   norm_opt <- match.arg(norm_opt)
   zi_model <- match.arg(zi_model)
+  permutation <- match.arg(permutation)
+  if (length(n_permutations) != 1 || !is.finite(n_permutations) || n_permutations < 1) {
+    stop("`n_permutations` must be a positive number.")
+  }
+  n_permutations <- as.integer(n_permutations)
 
   # ---- input checks -------------------------------------------------------------------------
   if (is.null(rownames(mat)) || is.null(colnames(mat))) {
@@ -151,6 +219,35 @@ iDESC <- function(mat, meta, subject_var, group_var,
     if (any(is.na(x))) stop("Missing values in covariate `", cv, "`.")
     base_df[[cv]] <- if (is.character(x) || is.logical(x)) factor(x) else if (is.factor(x)) droplevels(x) else x
   }
+
+  # ---- permutation test: decide and check the design ----------------------------------------
+  sub_idx <- as.integer(base_df$sub)
+  n_subj <- nlevels(base_df$sub)
+  subjects_per_group <- vapply(group_levels, function(l) length(unique(sub_idx[group == l])), integer(1))
+  use_perm <- switch(permutation, yes = TRUE, no = FALSE,
+                     auto = min(subjects_per_group) < min_subjects_asymptotic)
+  if (permutation == "auto") {
+    message("Subjects per group: ", paste0(group_levels, " = ", subjects_per_group, collapse = ", "),
+            "; permutation p-values are ", if (use_perm) "computed" else "not computed",
+            " (min_subjects_asymptotic = ", min_subjects_asymptotic, ").")
+  }
+  if (use_perm) {
+    how <- if (permutation == "auto") " (switched on by permutation = \"auto\")" else ""
+    if (sum(subjects_per_group) != n_subj) {
+      stop("Permutation of the group label between subjects", how, " needs every subject in a single ",
+           "group, but some subjects have cells in several groups. Use permutation = \"no\".")
+    }
+    for (cv in covariates) {
+      n_values <- tapply(base_df[[cv]], sub_idx, function(x) length(unique(x)))
+      if (any(n_values > 1)) {
+        stop("Permutation of the group label between subjects", how, " needs covariates that are ",
+             "constant within subject, but `", cv, "` varies within subject. Use a subject-level ",
+             "covariate or permutation = \"no\".")
+      }
+    }
+  }
+  # observed group (integer code) of every subject, subjects in the order of levels(base_df$sub)
+  subj_group <- as.integer(group)[match(seq_len(n_subj), sub_idx)]
 
   # ---- cells expressing each gene, per group -------------------------------------------------
   gene_group_expressed <- do.call(cbind, lapply(group_levels, function(l) {
@@ -354,11 +451,92 @@ iDESC <- function(mat, meta, subject_var, group_var,
   }
   names(res_list) <- model_genes
 
+  # ---- permutation p-values -------------------------------------------------------------------
+  # The group label is permuted between subjects: every subject keeps its cells and covariates and
+  # the group sizes are kept. The null model does not depend on the labels, so only the full model
+  # is fitted again. Statistics: LRT (omnibus) and |estimate| of every group contrast.
+  n_stat <- 1 + length(contrast_names)
+  perm_info <- list(used = use_perm, subjects_per_group = subjects_per_group)
+  perm_res <- list()
+  if (use_perm) {
+    pl <- permutation_labels(subj_group, n_permutations, seed)
+    n_perm <- ncol(pl$labels)
+    if (pl$exhaustive) {
+      warning("Only ", pl$n_arrangements, " distinct arrangements of the group labels between subjects: ",
+              "all ", n_perm, " arrangements other than the observed one are used instead of ",
+              n_permutations, " random permutations (exact test; smallest possible p-value = ",
+              signif(1 / (n_perm + 1), 3), ").", call. = FALSE)
+    }
+    eligible <- model_genes[vapply(res_list, function(r) {
+      !is.null(r$values) && !is.null(r$null) && is.finite(r$values["LRT_stat"])
+    }, logical(1))]
+    perm_stats <- stats::setNames(lapply(eligible, function(g) matrix(NA_real_, n_perm, n_stat)), eligible)
+    perm_done <- stats::setNames(lapply(eligible, function(g) logical(n_perm)), eligible)
+    obs_stats <- lapply(res_list[eligible], function(r) c(unname(r$values["LRT_stat"]), abs(unname(r$contrasts))))
+
+    perm_task <- function(task) {
+      y <- mat[task$gene, ]
+      null <- res_list[[task$gene]]$null
+      out <- matrix(NA_real_, length(task$idx), n_stat)
+      for (j in seq_along(task$idx)) {
+        grp <- factor(group_levels[pl$labels[sub_idx, task$idx[j]]], levels = group_levels)
+        f <- fit_full(y, grp, null, se = FALSE)
+        if (inherits(f, "error")) next
+        stat <- lrt_statistic(loglik_of(f), null)
+        if (is.na(stat)) next
+        est <- tryCatch(glmmTMB::fixef(f)$cond, error = function(e) NULL)
+        if (is.null(est) || !all(group_coefs %in% names(est))) next
+        out[j, ] <- c(stat, abs(drop(contrast_mat %*% est[group_coefs])))
+      }
+      out
+    }
+    # Tasks are (gene, chunk of permutations); the chunk size only affects the load balance,
+    # never the results, because every permuted fit is deterministic and independent
+    run_block <- function(genes, idx) {
+      if (length(genes) == 0 || length(idx) == 0) return(invisible(NULL))
+      chunk <- min(length(idx), max(1, ceiling(length(genes) * length(idx) / (max(cores, 1) * 8))))
+      chunks <- split(idx, ceiling(seq_along(idx) / chunk))
+      tasks <- unlist(lapply(genes, function(g) lapply(unname(chunks), function(ix) list(gene = g, idx = ix))),
+                      recursive = FALSE)
+      out <- parallel::mclapply(tasks, perm_task, mc.cores = cores, mc.preschedule = FALSE)
+      for (k in seq_along(tasks)) {
+        g <- tasks[[k]]$gene
+        ix <- tasks[[k]]$idx
+        # a task without a result (e.g. a killed worker) leaves its permutations as failed
+        if (is.matrix(out[[k]]) && nrow(out[[k]]) == length(ix)) perm_stats[[g]][ix, ] <<- out[[k]]
+        perm_done[[g]][ix] <<- TRUE
+      }
+      invisible(NULL)
+    }
+    perm_p <- function(g) permutation_pvalues(obs_stats[[g]], perm_stats[[g]][perm_done[[g]], , drop = FALSE])
+
+    # Sequential stopping: a first block for all genes, the rest only for genes with any
+    # permutation p-value (omnibus or contrast) below `continue_below`
+    first_block <- 99L
+    continue_below <- 0.1
+    first <- if (isTRUE(sequential)) seq_len(min(first_block, n_perm)) else seq_len(n_perm)
+    rest <- setdiff(seq_len(n_perm), first)
+    run_block(eligible, first)
+    continued <- character(0)
+    if (length(rest) > 0) {
+      continued <- eligible[vapply(eligible, function(g) any(perm_p(g)$p < continue_below, na.rm = TRUE), logical(1))]
+      run_block(continued, rest)
+    }
+    perm_res <- stats::setNames(lapply(eligible, perm_p), eligible)
+    perm_info <- c(perm_info, list(n_permutations = n_perm, n_permutations_requested = n_permutations,
+                                   exhaustive = pl$exhaustive, n_arrangements = pl$n_arrangements,
+                                   seed = seed, sequential = isTRUE(sequential),
+                                   first_block = if (isTRUE(sequential)) length(first) else NA_integer_,
+                                   continue_below = if (isTRUE(sequential)) continue_below else NA_real_,
+                                   genes_all_permutations = if (length(rest) > 0) continued else eligible))
+  }
+
   # ---- per-gene status: one row per input gene ---------------------------------------------
   n_in <- length(input_genes)
   gene_status <- data.frame(gene = input_genes, status = rep("filtered", n_in),
                             convergence = rep(NA_integer_, n_in), pdHess = rep(NA, n_in),
                             convergence_null = rep(NA_integer_, n_in),
+                            n_perm_failed = rep(NA_integer_, n_in),
                             message = rep(NA_character_, n_in), stringsAsFactors = FALSE)
   gene_status$status[input_genes %in% genes_to_exclude] <- "one_group"
   if (length(res_list) > 0) {
@@ -368,6 +546,10 @@ iDESC <- function(mat, meta, subject_var, group_var,
     gene_status$pdHess[idx] <- vapply(res_list, function(r) as.logical(r$pdHess), logical(1))
     gene_status$convergence_null[idx] <- vapply(res_list, function(r) as.integer(r$convergence_null), integer(1))
     gene_status$message[idx] <- vapply(res_list, function(r) as.character(r$message), character(1))
+  }
+  if (length(perm_res) > 0) {
+    gene_status$n_perm_failed[match(names(perm_res), input_genes)] <-
+      vapply(perm_res, function(r) as.integer(r$n_failed), integer(1))
   }
   failed <- gene_status$gene[gene_status$status == "fit_error"]
   if (length(failed) > 0) {
@@ -391,6 +573,30 @@ iDESC <- function(mat, meta, subject_var, group_var,
   res_tb[["LRT_stat"]] <- values[, "LRT_stat"]
   res_tb[["Pval_LRT_group"]] <- values[, "Pval_LRT_group"]
   res_tb[["FDR_LRT_group"]] <- bh(values[, "Pval_LRT_group"])
+  if (use_perm) {
+    perm_p_mat <- matrix(NA_real_, length(res_genes), n_stat, dimnames = list(res_genes, NULL))
+    n_perm_used <- stats::setNames(rep(NA_integer_, length(res_genes)), res_genes)
+    for (g in names(perm_res)) {
+      perm_p_mat[g, ] <- perm_res[[g]]$p
+      n_perm_used[g] <- perm_res[[g]]$n_valid
+    }
+    res_tb[["Pval_perm_group"]] <- perm_p_mat[, 1]
+    res_tb[["FDR_perm_group"]] <- bh(perm_p_mat[, 1])
+    for (k in seq_along(contrast_names)) {
+      res_tb[[paste0("Pval_perm_", contrast_names[k])]] <- perm_p_mat[, k + 1]
+      res_tb[[paste0("FDR_perm_", contrast_names[k])]] <- bh(perm_p_mat[, k + 1])
+    }
+    res_tb[["N_perm"]] <- unname(n_perm_used)
+    n_tested <- sum(!is.na(perm_p_mat[, 1]))
+    if (n_tested / (perm_info$n_permutations + 1) > 0.05) {
+      message("Note: with ", perm_info$n_permutations, " permutations the smallest permutation p-value is ",
+              signif(1 / (perm_info$n_permutations + 1), 3), "; with ", n_tested, " genes a single gene ",
+              "cannot reach a BH FDR below 0.05 (at least ", ceiling(n_tested / (0.05 * (perm_info$n_permutations + 1))),
+              " genes at the smallest p-value would be needed).",
+              if (perm_info$exhaustive) " All distinct arrangements were already used." else
+                paste0(" Use n_permutations >= ", 20 * n_tested, " to avoid this limit."))
+    }
+  }
   for (cn in c("Dispersion", "Sigma2", "Theta", "Minus2LogLik", if (isTRUE(fit_stats)) c("LogLik", "Npar", "AIC"))) {
     res_tb[[cn]] <- values[, cn]
   }
@@ -408,6 +614,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
     model_results = res_tb,
     problematic_genes_cells_expressed = problematic_genes_expressed,
     total_cells = total_cells_per_group,
-    gene_status = gene_status
+    gene_status = gene_status,
+    permutation = perm_info
   )
 }
