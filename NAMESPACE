@@ -3,4 +3,3 @@
 export(iDESC)
 export(normalization_factors)
 export(preprocessing)
-export(zp_prediction)

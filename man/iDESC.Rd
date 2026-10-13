@@ -2,7 +2,7 @@
 % Please edit documentation in R/iDESC_function.R
 \name{iDESC}
 \alias{iDESC}
-\title{iDESC: main function for DE analysis using zero-inflated negative binomial mixed model}
+\title{iDESC: differential expression in single-cell data with a negative binomial mixed model}
 \usage{
 iDESC(
   mat,
@@ -15,62 +15,128 @@ iDESC(
   gene_sub_filtering = 0,
   gene_cell_filtering = 0.05,
   ncell_filtering = 1,
-  span = 0.05,
-  loess_control = "",
   covariates = NULL,
-  cores = 1
+  cores = 1,
+  zi_model = c("none", "constant"),
+  pairwise = TRUE,
+  fit_stats = FALSE
 )
 }
 \arguments{
-\item{mat}{Count matrix}
+\item{mat}{Count matrix (genes x cells) with gene names as row names and cell names as column
+names}
 
-\item{meta}{Data frame including information for cells}
+\item{meta}{Data frame including information for cells (row names = cell names, same order as
+the columns of \code{mat})}
 
 \item{subject_var}{The name of subject information in meta}
 
-\item{group_var}{The name of group/disease information for DE analysis in meta}
+\item{group_var}{The name of group/disease information for DE analysis in meta. The variable is
+used as a factor; its first level is the reference.}
 
-\item{norm_opt}{Option for normalizing factors}
+\item{norm_opt}{Option for normalizing factors: \code{"SeqDepth"} (default), \code{"SizeFactor"}, \code{"User"}
+or \code{"None"}}
 
 \item{user_sf}{Option for user-specific normalizing factors}
 
 \item{sub_cell_filtering}{Filtering on cells within each subject}
 
-\item{gene_sub_filtering}{Filtering on genes based on expression in each subject}
+\item{gene_sub_filtering}{Filtering on genes based on expression in each subject: a gene is kept
+if, in at least one group, it is expressed in at least \code{gene_cell_filtering} of the cells in at
+least \code{gene_sub_filtering} x (number of subjects of that group) subjects. The default 0 keeps
+every gene.}
 
-\item{gene_cell_filtering}{Filtering on genes based on expression across all cells}
+\item{gene_cell_filtering}{Minimum proportion of cells of a subject expressing the gene (used
+together with \code{gene_sub_filtering})}
 
 \item{ncell_filtering}{Filtering on cells based on the number of genes expressed}
 
-\item{span}{smoothing parameter for LOESS curve}
-
-\item{loess_control}{Optional. If set to "control", the LOESS smoothing function will use
-\code{loess.control(surface = "direct")}. This setting is recommended when working with sparse or
-zero-heavy datasets, where the default LOESS method may struggle to define neighborhoods for
-smoothing. Using "direct" computation ensures more stable and accurate smoothing but may be
-slower. Activate this option if you encounter warnings like "k-d tree limited by memory" or
-if the LOESS fit appears unstable.}
-
-\item{covariates}{Optional. A vector of covariates to include in the model.}
+\item{covariates}{Optional. A vector of covariates (columns of \code{meta}) to include in the model.}
 
 \item{cores}{Number of cores for parallel processing (default is 1)}
+
+\item{zi_model}{Zero-inflation component: \code{"none"} (default, \code{ziformula = ~ 0}) or \code{"constant"}
+(\code{ziformula = ~ 1}, the intercept is reported in \code{Theta} on the logit scale).}
+
+\item{pairwise}{If \code{TRUE} (default) and the group has three or more levels, adds for every pair
+of non-reference levels the contrast \verb{Beta_<B>_vs_<A>} (= coefficient of B minus coefficient of
+A, A being the earlier factor level), its Wald p-value \verb{Pval_Beta_<B>_vs_<A>} (from the
+covariance matrix of the fixed effects) and \verb{FDR_Beta_<B>_vs_<A>}. Ignored with two levels.}
+
+\item{fit_stats}{If \code{TRUE}, adds the columns \code{LogLik}, \code{Npar} and \code{AIC} of the fitted model.}
 }
 \value{
 A list containing:
 \itemize{
-\item{\strong{model_results}: A data frame containing the results of the differential expression analysis. For each gene, this includes estimated effect sizes (coefficients), dispersion parameters, zero-inflation estimates, statistical significance (raw p-values and FDR-corrected p-values), and model deviances.}
-\item{\strong{problematic_genes}: A data frame listing genes that were excluded from the main analysis because they were expressed in cells from only one group. For each gene, the table reports the number of cells with non-zero expression in each group. This can be used for further diagnostic or exploratory analyses, such as assessing group-specific expression patterns.}
+\item{\strong{model_results}: A data frame with one row per gene that passed the gene filter
+(in the order of \code{mat}). Columns: \code{Status} (see the section Gene status); \code{Alpha} (intercept);
+for every coefficient of the group (\verb{group<level>}) and of the covariates \verb{Beta_<coef>},
+\verb{Pval_Beta_<coef>} (Wald) and \verb{FDR_Beta_<coef>}; the pairwise contrasts (see \code{pairwise});
+\code{LRT_stat}, \code{Pval_LRT_group} and \code{FDR_LRT_group} (likelihood-ratio test of the whole group
+effect, chi-square with one degree of freedom per group coefficient); \code{Dispersion}
+(1 / negative binomial size parameter); \code{Sigma2} (variance of the subject random intercept);
+\code{Theta} (zero-inflation intercept, \code{NA} for \code{zi_model = "none"}); \code{Minus2LogLik}
+(-2 x maximised log-likelihood of the full model) and, with \code{fit_stats = TRUE}, \code{LogLik},
+\code{Npar} and \code{AIC}. All FDR columns are Benjamini-Hochberg adjustments across the genes that
+have the corresponding p-value. Genes with status \code{one_group} or \code{fit_error} have \code{NA} in
+every numeric column.}
+\item{\strong{problematic_genes_cells_expressed}: For the genes of \code{model_results} whose
+status is not \code{ok}: number of cells with non-zero expression in each group and \code{Reason}
+(the status). \code{NULL} when there is no such gene.}
+\item{\strong{total_cells}: A one-row data frame with the number of cells per group after
+filtering.}
+\item{\strong{gene_status}: A data frame with one row per input gene (row of \code{mat}) and the
+columns \code{gene}, \code{status}, \code{convergence}, \code{pdHess}, \code{convergence_null} and \code{message}
+(see the section Gene status).}
 }
+The log-likelihoods are the maximised values reported by the optimizer
+(\code{-fit$fit$objective}), which are available even when the Hessian is not positive definite
+(\code{stats::logLik()} of a \code{glmmTMB} fit returns \code{NA} in that case).
 }
 \description{
-iDESC: main function for DE analysis using zero-inflated negative binomial mixed model
+For every gene a negative binomial mixed model with the subject as random intercept is fitted
+with \code{glmmTMB}: \code{y ~ group + covariates + offset(log(norm_sf)) + (1 | sub)}. The group effect is
+tested with a likelihood-ratio test (full model against the same model without \code{group}), and
+every group coefficient (and, optionally, every remaining pairwise contrast) with a Wald test.
 }
-\examples{
+\section{Model}{
 
+\code{zi_model = "none"} (default) fits the negative binomial mixed model without zero inflation
+(\code{ziformula = ~ 0}). \code{zi_model = "constant"} adds one zero-inflation probability per gene
+(\code{ziformula = ~ 1}). The zero-inflation formula of iDESC <= 0.2.0
+(\code{~ offset(predict_pi_offset) - 1 + ind_zero + (1 | sub)}) was removed in 0.3.0, see \code{NEWS.md}.
+}
+
+\section{Gene status}{
+
+There is one status vocabulary, used in the \code{Status} column of \code{model_results}, in the \code{status}
+column of \code{gene_status} and in the \code{Reason} column of \code{problematic_genes_cells_expressed}:
+\describe{
+\item{\code{ok}}{the model was fitted and every group coefficient has a Wald p-value.}
+\item{\code{no_standard_errors}}{the model was fitted, but at least one group coefficient has no
+standard error / Wald p-value (typically a Hessian that is not positive definite). The
+estimates and the likelihood-ratio test are still reported.}
+\item{\code{fit_error}}{the model could not be fitted or its results could not be extracted; the
+error message is in \code{gene_status$message}.}
+\item{\code{one_group}}{the gene is expressed in cells of fewer than two groups; not modelled.}
+\item{\code{filtered}}{the gene was removed by the gene filter of \code{\link[=preprocessing]{preprocessing()}}; it appears
+only in \code{gene_status}.}
+}
+The optimizer convergence code and the positive-definite-Hessian flag are not folded into the
+status: they are the columns \code{convergence} (0 = converged), \code{pdHess} and \code{convergence_null}
+(null model of the likelihood-ratio test) of \code{gene_status}.
+}
+
+\examples{
+\donttest{
 library(iDESC)
 data(IPF_example)
-mat=IPF_example$mat
-meta=IPF_example$meta
-sequencing_depth=IPF_example$meta$sequencing_depth
-result=iDESC(mat,meta,subject_var="subject",group_var="disease",norm_opt="User",user_sf = sequencing_depth,span = 0.7,cores = 4)
+mat <- IPF_example$mat
+meta <- IPF_example$meta
+sequencing_depth <- IPF_example$meta$sequencing_depth
+result <- iDESC(mat, meta, subject_var = "subject", group_var = "disease",
+                norm_opt = "User", user_sf = sequencing_depth, cores = 2)
+head(result$model_results)
+table(result$gene_status$status)
+}
 }

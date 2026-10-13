@@ -4,7 +4,7 @@ Title: iDESC: Identifying differential expression in single-cell RNA sequencing 
 Version: 0.2.0
 Author: Yunqing Liu
 Maintainer: Yunqing Liu <yunqing.liu@yale.edu>
-Description: Single cell RNA-seq differential expression analysis considering subject effect with zero-inflated negative binomial mixed model.
+Description: Single cell RNA-seq differential expression analysis considering subject effect with a negative binomial mixed model (optionally zero-inflated).
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
@@ -12,12 +12,8 @@ RoxygenNote: 7.3.2
 Roxygen: list(markdown = TRUE)
 Imports: 
     glmmTMB,
-    boot,
-    plyr,
     Matrix,
-    Seurat,
     stats,
-    graphics,
     parallel
 Depends: 
-    R (>= 3.50)
+    R (>= 3.5.0)
