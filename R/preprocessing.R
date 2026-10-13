@@ -14,6 +14,7 @@
 #' @param cores Number of cores for parallel processing (default is 1)
 #'
 #' @return A list with the processed count matrix (`mat`) and the matching data frame of cells (`meta`)
+#' @importFrom Matrix colSums
 #' @export
 
 preprocessing<-function(mat,meta,subject_var,group_var,sub_cell_filtering,gene_sub_filtering,gene_cell_filtering,ncell_filtering,cores=1){

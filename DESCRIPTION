@@ -1,7 +1,7 @@
 Package: iDESC
 Type: Package
 Title: iDESC: Identifying differential expression in single-cell RNA sequencing data with multiple subjects
-Version: 0.2.0
+Version: 0.3.0
 Author: Yunqing Liu
 Maintainer: Yunqing Liu <yunqing.liu@yale.edu>
 Description: Single cell RNA-seq differential expression analysis considering subject effect with a negative binomial mixed model (optionally zero-inflated).
@@ -15,5 +15,8 @@ Imports:
     Matrix,
     stats,
     parallel
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
 Depends: 
     R (>= 3.5.0)
