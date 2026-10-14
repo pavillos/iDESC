@@ -3,7 +3,7 @@
 **Breaking release.** The model fitted by `iDESC()` changed, so results differ from 0.2.0
 *by design*, and several arguments and output columns were removed or renamed. Version 0.2.0
 (commit `2be58b9`) remains available to reproduce earlier analyses:
-`remotes::install_github("pavillos/iDESC", ref = "2be58b9")`.
+`remotes::install_github("pavillos/iDESC", ref = "v0.2.0")`.
 
 ## Removed
 
@@ -76,6 +76,8 @@
 
 ## Changed
 
+* Authors: Yunqing Liu (original author), Pablo Villoslada-Blanco (author and maintainer of this
+  fork) and Adrián Santiso (contributor).
 * The last column is `Minus2LogLik` (`Deviance` in 0.2.0, which was always `NA` with recent
   versions of glmmTMB); it is computed from the optimizer objective and is therefore available
   for every fitted gene.

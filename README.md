@@ -8,14 +8,14 @@
 
 The goal of iDESC is to identify differentially expressed genes between groups in single cell RNA-seq data with several subjects per group, using a negative binomial mixed model with the subject as random effect.
 
-This is a fork of [yl883/iDESC](https://github.com/yl883/iDESC). Version 0.3.0 changes the model and the output (see `NEWS.md`); version 0.2.0 is commit `2be58b9`.
+This is a fork of [yl883/iDESC](https://github.com/yl883/iDESC). Version 0.3.0 changes the model and the output (see `NEWS.md`); version 0.2.0 is the tag `v0.2.0` (commit `2be58b9`).
 
 ## Installation
 
 ``` r
 devtools::install_github("pavillos/iDESC")
 # version 0.2.0, to reproduce earlier analyses
-devtools::install_github("pavillos/iDESC", ref = "2be58b9")
+devtools::install_github("pavillos/iDESC", ref = "v0.2.0")
 ```
 
 ## Example
