@@ -24,7 +24,8 @@ iDESC(
   min_subjects_asymptotic = 10,
   n_permutations = 999,
   seed = 1,
-  sequential = TRUE
+  sequential = TRUE,
+  zi_boundary_tol = 0.001
 )
 }
 \arguments{
@@ -61,7 +62,8 @@ together with \code{gene_sub_filtering})}
 \item{cores}{Number of cores for parallel processing (default is 1)}
 
 \item{zi_model}{Zero-inflation component: \code{"none"} (default, \code{ziformula = ~ 0}) or \code{"constant"}
-(\code{ziformula = ~ 1}, the intercept is reported in \code{Theta} on the logit scale).}
+(\code{ziformula = ~ 1}, the intercept is reported in \code{Theta} on the logit scale). Constant
+fits use the observed-data inference fallback described in the Model section.}
 
 \item{pairwise}{If \code{TRUE} (default) and the group has three or more levels, adds for every pair
 of non-reference levels the contrast \verb{Beta_<B>_vs_<A>} (= coefficient of B minus coefficient of
@@ -83,12 +85,16 @@ asymptotic p-values are considered enough by \code{permutation = "auto"} (defaul
 
 \item{sequential}{If \code{TRUE} (default), genes that are clearly not significant after the first
 99 permutations are not permuted further. See the section Permutation test.}
+
+\item{zi_boundary_tol}{Finite non-negative tolerance for twice the absolute difference
+between the original ZINB and NB log-likelihoods (default \code{1e-3}). Used only for a constant
+fit needing inference recovery; zero disables boundary selection but retains retries.}
 }
 \value{
 A list containing:
 \itemize{
 \item{\strong{model_results}: A data frame with one row per gene that passed the gene filter
-(in the order of \code{mat}). Columns: \code{Status} (see the section Gene status); \code{Alpha} (intercept);
+(in the order of \code{mat}). Columns: \code{Status}, \code{zi_status} (see the section Gene status); \code{Alpha} (intercept);
 for every coefficient of the group (\verb{group<level>}) and of the covariates \verb{Beta_<coef>},
 \verb{Pval_Beta_<coef>} (Wald) and \verb{FDR_Beta_<coef>}; the pairwise contrasts (see \code{pairwise});
 \code{LRT_stat}, \code{Pval_LRT_group} and \code{FDR_LRT_group} (likelihood-ratio test of the whole group
@@ -108,7 +114,7 @@ status is not \code{ok}: number of cells with non-zero expression in each group 
 \item{\strong{total_cells}: A one-row data frame with the number of cells per group after
 filtering.}
 \item{\strong{gene_status}: A data frame with one row per input gene (row of \code{mat}) and the
-columns \code{gene}, \code{status}, \code{convergence}, \code{pdHess}, \code{convergence_null}, \code{n_perm_failed}
+columns \code{gene}, \code{status}, \code{zi_status}, \code{convergence}, \code{pdHess}, \code{convergence_null}, \code{n_perm_failed}
 (number of permutations that were run but not valid; \code{NA} without permutation test) and
 \code{message} (see the section Gene status).}
 \item{\strong{permutation}: A list describing the permutation test: \code{used},
@@ -134,6 +140,19 @@ With few subjects per group the asymptotic p-values are too small, and permutati
 (\code{ziformula = ~ 0}). \code{zi_model = "constant"} adds one zero-inflation probability per gene
 (\code{ziformula = ~ 1}). The zero-inflation formula of iDESC <= 0.2.0
 (\code{~ offset(predict_pi_offset) - 1 + ind_zero + (1 | sub)}) was removed in 0.3.0, see \code{NEWS.md}.
+
+When a constant zero-inflation fit lacks a positive definite Hessian or group standard
+errors, the observed data are also fitted with NB. If twice the absolute log-likelihood
+difference is below \code{zi_boundary_tol}, NB supplies all coefficients, Wald tests, pairwise
+contrasts, dispersion and random-intercept variance. This is valid at the boundary:
+NB is the nested ZINB model at pi = 0, where the maximum-likelihood estimates coincide.
+\code{Theta} retains the original ZINB estimate. Otherwise ZINB is retried from NB starting
+values (initial pi = 0.1), then with BFGS if needed. A retry is accepted only with a positive
+definite Hessian, group standard errors and a log-likelihood within
+\verb{1e-4 * max(1, abs(original log-likelihood))} of the original. An accepted retry supplies
+coefficient inference and \code{Theta}; otherwise the original inference is retained.
+The original ZINB fit always supplies the LRT, likelihood summaries, parameter count,
+AIC and observed permutation contrast statistics. Permuted fits never use this fallback.
 }
 
 \section{Permutation test}{
@@ -197,7 +216,11 @@ The optimizer convergence code and the positive-definite-Hessian flag are not fo
 status: they are the columns \code{convergence} (0 = converged), \code{pdHess} and \code{convergence_null}
 (null model of the likelihood-ratio test) of \code{gene_status}. A full model that fails or ends
 with a lower likelihood than the null model is fitted once more starting from the null
-estimates (the better fit is kept).
+estimates (the better fit is kept). These diagnostics describe the original fit even when
+coefficient inference uses a fallback. The \code{zi_status} column in both result tables is
+\code{none} for fitted NB genes, \code{estimated} for usable original ZINB fits, \code{boundary} for the
+nested NB fallback, \code{refit} for an accepted ZINB retry, or \code{unidentified} when recovery fails.
+Genes that were not fitted have \code{NA}. \code{Status} uses the final chosen Wald p-values.
 }
 
 \examples{

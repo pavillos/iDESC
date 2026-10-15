@@ -1,3 +1,19 @@
+# iDESC 0.4.0
+
+* Recover coefficient inference for `zi_model = "constant"` fits without a positive definite
+  Hessian or group standard errors. At the pi = 0 boundary, use the nested NB fit for
+  coefficients, Wald tests, pairwise contrasts, dispersion and subject variance; retain the
+  original ZINB `Theta`. New `zi_boundary_tol` defaults to 1e-3 (twice the absolute likelihood
+  difference). Otherwise retry ZINB from NB starting values, then with BFGS, accepting only
+  usable fits with a likelihood sufficiently close to the original.
+* Add `zi_status` to `gene_status` and immediately after `Status` in `model_results`:
+  `none`, `estimated`, `boundary`, `refit`, `unidentified`, or `NA` for genes not fitted.
+  `Status` reflects the chosen coefficient inference; convergence/Hessian diagnostics still
+  describe the original fit.
+* LRTs, likelihood summaries, Npar, AIC and all permutation statistics retain the original
+  ZINB fit. Permuted fits never run recovery. NB (`zi_model = "none"`) results are unchanged
+  apart from the new status column.
+
 # iDESC 0.3.0
 
 **Breaking release.** The model fitted by `iDESC()` changed, so results differ from 0.2.0

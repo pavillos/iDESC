@@ -20,7 +20,7 @@ knitr::opts_chunk$set(
 
 The goal of iDESC is to identify differentially expressed genes between groups in single cell RNA-seq data with several subjects per group, using a negative binomial mixed model with the subject as random effect.
 
-This is a fork of [yl883/iDESC](https://github.com/yl883/iDESC). Version 0.3.0 changes the model and the output (see `NEWS.md`); version 0.2.0 is the tag `v0.2.0` (commit `2be58b9`).
+This is a fork of [yl883/iDESC](https://github.com/yl883/iDESC). Version 0.4.0 improves zero-inflated model inference; 0.3.0 changed the model and the output (see `NEWS.md`); version 0.2.0 is the tag `v0.2.0` (commit `2be58b9`).
 
 ## Installation
 
@@ -61,3 +61,17 @@ result=iDESC(mat,meta,subject_var="subject",group_var="disease",
              norm_opt="User",user_sf = sequencing_depth,cores=4,
              permutation="yes",n_permutations=999,seed=1)
 ```
+
+With `zi_model = "constant"`, version 0.4.0 recovers coefficient inference when the original
+fit lacks a positive definite Hessian or group standard errors. If the ZINB and NB
+log-likelihoods differ by less than `zi_boundary_tol / 2` (default tolerance `1e-3`),
+the fit is treated as the pi = 0 boundary, where ZINB reduces to NB. NB then supplies
+coefficients, Wald tests, contrasts, dispersion and subject variance; `Theta` retains
+the ZINB estimate. Otherwise ZINB is retried from NB starting values, then with BFGS,
+and accepted only with usable standard errors and a sufficiently close likelihood.
+
+`zi_status` in both result tables records `none`, `estimated`, `boundary`, `refit`, or
+`unidentified` (`NA` for genes not fitted). `Status` reflects the final Wald tests.
+The LRT, likelihood summaries and all permutation statistics always use the original
+fit, as do the convergence and Hessian diagnostics in `gene_status`. Permuted fits
+never run this recovery.

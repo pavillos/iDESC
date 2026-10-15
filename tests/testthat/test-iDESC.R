@@ -146,7 +146,7 @@ test_that("fit_stats = TRUE adds LogLik, Npar and AIC", {
 
 test_that("gene_status has one row per input gene and uses the statuses of model_results", {
   gs <- res_default$gene_status
-  expect_identical(colnames(gs), c("gene", "status", "convergence", "pdHess", "convergence_null",
+  expect_identical(colnames(gs), c("gene", "status", "zi_status", "convergence", "pdHess", "convergence_null",
                                    "n_perm_failed", "message"))
   expect_identical(gs$gene, rownames(sim3$mat))
   expect_identical(gs$status, res_default$model_results$Status)

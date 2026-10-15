@@ -13,6 +13,19 @@
 #' (`ziformula = ~ 1`). The zero-inflation formula of iDESC <= 0.2.0
 #' (`~ offset(predict_pi_offset) - 1 + ind_zero + (1 | sub)`) was removed in 0.3.0, see `NEWS.md`.
 #'
+#' When a constant zero-inflation fit lacks a positive definite Hessian or group standard
+#' errors, the observed data are also fitted with NB. If twice the absolute log-likelihood
+#' difference is below `zi_boundary_tol`, NB supplies all coefficients, Wald tests, pairwise
+#' contrasts, dispersion and random-intercept variance. This is valid at the boundary:
+#' NB is the nested ZINB model at pi = 0, where the maximum-likelihood estimates coincide.
+#' `Theta` retains the original ZINB estimate. Otherwise ZINB is retried from NB starting
+#' values (initial pi = 0.1), then with BFGS if needed. A retry is accepted only with a positive
+#' definite Hessian, group standard errors and a log-likelihood within
+#' `1e-4 * max(1, abs(original log-likelihood))` of the original. An accepted retry supplies
+#' coefficient inference and `Theta`; otherwise the original inference is retained.
+#' The original ZINB fit always supplies the LRT, likelihood summaries, parameter count,
+#' AIC and observed permutation contrast statistics. Permuted fits never use this fallback.
+#'
 #' @section Permutation test:
 #' The asymptotic likelihood-ratio and Wald p-values rely on the number of subjects being large;
 #' with a handful of subjects per group they are anti-conservative. With `permutation = "yes"`, or
@@ -71,7 +84,11 @@
 #' status: they are the columns `convergence` (0 = converged), `pdHess` and `convergence_null`
 #' (null model of the likelihood-ratio test) of `gene_status`. A full model that fails or ends
 #' with a lower likelihood than the null model is fitted once more starting from the null
-#' estimates (the better fit is kept).
+#' estimates (the better fit is kept). These diagnostics describe the original fit even when
+#' coefficient inference uses a fallback. The `zi_status` column in both result tables is
+#' `none` for fitted NB genes, `estimated` for usable original ZINB fits, `boundary` for the
+#' nested NB fallback, `refit` for an accepted ZINB retry, or `unidentified` when recovery fails.
+#' Genes that were not fitted have `NA`. `Status` uses the final chosen Wald p-values.
 #'
 #' @param mat Count matrix (genes x cells) with gene names as row names and cell names as column
 #' names
@@ -94,7 +111,11 @@
 #' @param covariates Optional. A vector of covariates (columns of `meta`) to include in the model.
 #' @param cores Number of cores for parallel processing (default is 1)
 #' @param zi_model Zero-inflation component: `"none"` (default, `ziformula = ~ 0`) or `"constant"`
-#' (`ziformula = ~ 1`, the intercept is reported in `Theta` on the logit scale).
+#' (`ziformula = ~ 1`, the intercept is reported in `Theta` on the logit scale). Constant
+#' fits use the observed-data inference fallback described in the Model section.
+#' @param zi_boundary_tol Finite non-negative tolerance for twice the absolute difference
+#' between the original ZINB and NB log-likelihoods (default `1e-3`). Used only for a constant
+#' fit needing inference recovery; zero disables boundary selection but retains retries.
 #' @param pairwise If `TRUE` (default) and the group has three or more levels, adds for every pair
 #' of non-reference levels the contrast `Beta_<B>_vs_<A>` (= coefficient of B minus coefficient of
 #' A, A being the earlier factor level), its Wald p-value `Pval_Beta_<B>_vs_<A>` (from the
@@ -113,7 +134,7 @@
 #' @return A list containing:
 #' \itemize{
 #'   \item{\strong{model_results}: A data frame with one row per gene that passed the gene filter
-#'   (in the order of `mat`). Columns: `Status` (see the section Gene status); `Alpha` (intercept);
+#'   (in the order of `mat`). Columns: `Status`, `zi_status` (see the section Gene status); `Alpha` (intercept);
 #'   for every coefficient of the group (`group<level>`) and of the covariates `Beta_<coef>`,
 #'   `Pval_Beta_<coef>` (Wald) and `FDR_Beta_<coef>`; the pairwise contrasts (see `pairwise`);
 #'   `LRT_stat`, `Pval_LRT_group` and `FDR_LRT_group` (likelihood-ratio test of the whole group
@@ -133,7 +154,7 @@
 #'   \item{\strong{total_cells}: A one-row data frame with the number of cells per group after
 #'   filtering.}
 #'   \item{\strong{gene_status}: A data frame with one row per input gene (row of `mat`) and the
-#'   columns `gene`, `status`, `convergence`, `pdHess`, `convergence_null`, `n_perm_failed`
+#'   columns `gene`, `status`, `zi_status`, `convergence`, `pdHess`, `convergence_null`, `n_perm_failed`
 #'   (number of permutations that were run but not valid; `NA` without permutation test) and
 #'   `message` (see the section Gene status).}
 #'   \item{\strong{permutation}: A list describing the permutation test: `used`,
@@ -164,10 +185,14 @@ iDESC <- function(mat, meta, subject_var, group_var,
                   ncell_filtering = 1, covariates = NULL, cores = 1,
                   zi_model = c("none", "constant"), pairwise = TRUE, fit_stats = FALSE,
                   permutation = c("auto", "yes", "no"), min_subjects_asymptotic = 10,
-                  n_permutations = 999, seed = 1, sequential = TRUE) {
+                  n_permutations = 999, seed = 1, sequential = TRUE, zi_boundary_tol = 1e-3) {
   norm_opt <- match.arg(norm_opt)
   zi_model <- match.arg(zi_model)
   permutation <- match.arg(permutation)
+  if (!is.numeric(zi_boundary_tol) || length(zi_boundary_tol) != 1 ||
+      !is.finite(zi_boundary_tol) || zi_boundary_tol < 0) {
+    stop("`zi_boundary_tol` must be a finite non-negative number.")
+  }
   if (length(n_permutations) != 1 || !is.finite(n_permutations) || n_permutations < 1) {
     stop("`n_permutations` must be a positive number.")
   }
@@ -305,12 +330,14 @@ iDESC <- function(mat, meta, subject_var, group_var,
   quiet <- function(expr) suppressWarnings(suppressMessages(expr))
   lrt_tol <- 1e-6
 
-  fit_model <- function(y, grp, full = TRUE, se = TRUE, start = NULL) {
+  fit_model <- function(y, grp, full = TRUE, se = TRUE, start = NULL, zi = zi_formula, control = NULL) {
     df <- base_df
     df$y <- y
     df$group <- grp
-    glmmTMB::glmmTMB(formula = if (full) full_formula else null_formula, data = df,
-                     family = glmmTMB::nbinom2, ziformula = zi_formula, se = se, start = start)
+    args <- list(formula = if (full) full_formula else null_formula, data = df,
+                 family = glmmTMB::nbinom2, ziformula = zi, se = se, start = start)
+    if (!is.null(control)) args$control <- control
+    do.call(glmmTMB::glmmTMB, args)
   }
   loglik_of <- function(fit) -as.numeric(fit$fit$objective)[1]
 
@@ -364,7 +391,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
                   "LogLik", "Npar", "AIC")
 
   fit_gene <- function(gene_name) {
-    out <- list(gene = gene_name, status = "fit_error", convergence = NA_integer_, pdHess = NA,
+    out <- list(gene = gene_name, status = "fit_error", zi_status = NA_character_, convergence = NA_integer_, pdHess = NA,
                 convergence_null = NA_integer_, message = NA_character_, values = NULL,
                 null = NULL, contrasts = NULL)
     y <- mat[gene_name, ]
@@ -378,20 +405,25 @@ iDESC <- function(mat, meta, subject_var, group_var,
     }
     extracted <- tryCatch({
       values <- stats::setNames(rep(NA_real_, length(value_cols)), value_cols)
-      ctab <- summary(f1)$coefficients$cond
+      chosen <- if (zi_model == "constant") {
+        zi_inference_fit(f1, function(...) quiet(fit_model(y, group, ...)),
+                         group_coefs, zi_boundary_tol)
+      } else list(fit = f1, status = "none")
+      inference_fit <- chosen$fit
+      ctab <- summary(inference_fit)$coefficients$cond
       est <- ctab[, "Estimate"]
       values["Alpha"] <- est["(Intercept)"]
       has <- coef_model %in% rownames(ctab)
       values[coef_cols[has]] <- est[coef_model[has]]
       values[paste0("Pval_", coef_cols[has])] <- ctab[coef_model[has], "Pr(>|z|)"]
 
-      # Group contrasts (also used as permutation statistics)
+      # Group contrasts for coefficient reporting
       beta_group <- stats::setNames(rep(NA_real_, n_gc), group_coefs)
       beta_group[group_coefs[group_coefs %in% names(est)]] <- est[group_coefs[group_coefs %in% names(est)]]
       contrasts <- drop(contrast_mat %*% beta_group)
       names(contrasts) <- contrast_names
       if (length(pair_names) > 0) {
-        V <- tryCatch(quiet(stats::vcov(f1)$cond), error = function(e) NULL)
+        V <- tryCatch(quiet(stats::vcov(inference_fit)$cond), error = function(e) NULL)
         for (pn in pair_names) {
           values[pn] <- contrasts[pn]
           l <- contrast_mat[pn, ]
@@ -404,18 +436,23 @@ iDESC <- function(mat, meta, subject_var, group_var,
         }
       }
 
+      # Permutations always use the original fit, including observed contrast estimates.
+      original_group <- if (zi_model == "constant") glmmTMB::fixef(f1)$cond[group_coefs] else beta_group
+      original_contrasts <- drop(contrast_mat %*% original_group)
+
       # Likelihood-ratio test of the group effect
       ll1 <- loglik_of(f1)
-      lrt_df <- sum(!is.na(beta_group))
+      lrt_df <- sum(!is.na(original_group))
       lrt_stat <- lrt_statistic(ll1, null)
       if (!is.na(lrt_stat) && lrt_df > 0) {
         values["LRT_stat"] <- lrt_stat
         values["Pval_LRT_group"] <- stats::pchisq(lrt_stat, df = lrt_df, lower.tail = FALSE)
       }
 
-      values["Dispersion"] <- 1 / stats::sigma(f1)
-      values["Sigma2"] <- exp(f1$fit$par[names(f1$fit$par) == "theta"][1])^2
-      if (zi_model == "constant") values["Theta"] <- glmmTMB::fixef(f1)$zi[1]
+      values["Dispersion"] <- 1 / stats::sigma(inference_fit)
+      values["Sigma2"] <- exp(inference_fit$fit$par[names(inference_fit$fit$par) == "theta"][1])^2
+      if (zi_model == "constant") values["Theta"] <- glmmTMB::fixef(
+        if (chosen$status == "boundary") f1 else inference_fit)$zi[1]
       npar <- length(f1$fit$par)
       values["Minus2LogLik"] <- -2 * ll1
       values["LogLik"] <- ll1
@@ -423,7 +460,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
       values["AIC"] <- -2 * ll1 + 2 * npar
 
       group_p <- values[paste0("Pval_", make.names(paste0("Beta_", group_coefs)))]
-      list(values = values, contrasts = contrasts,
+      list(values = values, contrasts = original_contrasts, zi_status = chosen$status,
            status = if (any(is.na(group_p))) "no_standard_errors" else "ok",
            convergence = as.integer(f1$fit$convergence)[1],
            pdHess = isTRUE(f1$sdr$pdHess))
@@ -444,7 +481,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
     r <- res_list[[i]]
     if (!is.list(r) || is.null(r$status)) {
       msg <- if (inherits(r, "try-error")) trimws(as.character(r)[1]) else "worker returned no result"
-      res_list[[i]] <- list(gene = model_genes[i], status = "fit_error", convergence = NA_integer_,
+      res_list[[i]] <- list(gene = model_genes[i], status = "fit_error", zi_status = NA_character_, convergence = NA_integer_,
                             pdHess = NA, convergence_null = NA_integer_, message = msg, values = NULL,
                             null = NULL, contrasts = NULL)
     }
@@ -534,6 +571,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
   # ---- per-gene status: one row per input gene ---------------------------------------------
   n_in <- length(input_genes)
   gene_status <- data.frame(gene = input_genes, status = rep("filtered", n_in),
+                            zi_status = rep(NA_character_, n_in),
                             convergence = rep(NA_integer_, n_in), pdHess = rep(NA, n_in),
                             convergence_null = rep(NA_integer_, n_in),
                             n_perm_failed = rep(NA_integer_, n_in),
@@ -542,6 +580,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
   if (length(res_list) > 0) {
     idx <- match(model_genes, input_genes)
     gene_status$status[idx] <- vapply(res_list, function(r) r$status, character(1))
+    gene_status$zi_status[idx] <- vapply(res_list, function(r) r$zi_status, character(1))
     gene_status$convergence[idx] <- vapply(res_list, function(r) as.integer(r$convergence), integer(1))
     gene_status$pdHess[idx] <- vapply(res_list, function(r) as.logical(r$pdHess), logical(1))
     gene_status$convergence_null[idx] <- vapply(res_list, function(r) as.integer(r$convergence_null), integer(1))
@@ -564,6 +603,7 @@ iDESC <- function(mat, meta, subject_var, group_var,
   }
   bh <- function(p) stats::p.adjust(p, method = "BH")
   res_tb <- data.frame(Status = gene_status$status[match(res_genes, gene_status$gene)],
+                       zi_status = gene_status$zi_status[match(res_genes, gene_status$gene)],
                        Alpha = values[, "Alpha"], row.names = res_genes, stringsAsFactors = FALSE)
   for (cn in c(coef_cols, pair_names)) {
     res_tb[[cn]] <- values[, cn]
