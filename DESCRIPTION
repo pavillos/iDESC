@@ -1,7 +1,7 @@
 Package: iDESC
 Type: Package
 Title: iDESC: Identifying differential expression in single-cell RNA sequencing data with multiple subjects
-Version: 0.3.0
+Version: 0.4.0
 Authors@R: c(
     person("Yunqing", "Liu", email = "yunqing.liu@yale.edu", role = "aut",
            comment = "original author of iDESC (yl883/iDESC)"),

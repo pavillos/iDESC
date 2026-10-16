@@ -37,7 +37,7 @@ run_idesc <- function(dat, ..., permutation = "no") {
 cols_030 <- function(coefs, pairs = NULL, perm = FALSE, fit_stats = FALSE, group_coefs = coefs) {
   triple <- function(x) if (length(x) == 0) character(0) else as.vector(rbind(x, paste0("Pval_", x), paste0("FDR_", x)))
   contrasts <- c(paste0("Beta_", group_coefs), pairs)
-  c("Status", "Alpha", triple(paste0("Beta_", coefs)), triple(pairs),
+  c("Status", "zi_status", "Alpha", triple(paste0("Beta_", coefs)), triple(pairs),
     "LRT_stat", "Pval_LRT_group", "FDR_LRT_group",
     if (perm) c("Pval_perm_group", "FDR_perm_group",
                 as.vector(rbind(paste0("Pval_perm_", contrasts), paste0("FDR_perm_", contrasts))), "N_perm"),
