@@ -143,7 +143,8 @@ With few subjects per group the asymptotic p-values are too small, and permutati
 
 When a constant zero-inflation fit lacks a positive definite Hessian or group standard
 errors, the observed data are also fitted with NB. If twice the absolute log-likelihood
-difference is below \code{zi_boundary_tol}, NB supplies all coefficients, Wald tests, pairwise
+difference is below \code{zi_boundary_tol} and the NB fit has a positive definite Hessian and group
+standard errors, NB supplies all coefficients, Wald tests, pairwise
 contrasts, dispersion and random-intercept variance. This is valid at the boundary:
 NB is the nested ZINB model at pi = 0, where the maximum-likelihood estimates coincide.
 \code{Theta} retains the original ZINB estimate. Otherwise ZINB is retried from NB starting

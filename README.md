@@ -69,8 +69,8 @@ result=iDESC(mat,meta,subject_var="subject",group_var="disease",
 With `zi_model = "constant"`, version 0.4.0 recovers coefficient
 inference when the original fit lacks a positive definite Hessian or
 group standard errors. If the ZINB and NB log-likelihoods differ by less
-than `zi_boundary_tol / 2` (default tolerance `1e-3`), the fit is
-treated as the pi = 0 boundary, where ZINB reduces to NB. NB then
+than `zi_boundary_tol / 2` (default tolerance `1e-3`) and the NB fit
+has usable standard errors, the fit is treated as the pi = 0 boundary, where ZINB reduces to NB. NB then
 supplies coefficients, Wald tests, contrasts, dispersion and subject
 variance; `Theta` retains the ZINB estimate. Otherwise ZINB is retried
 from NB starting values, then with BFGS, and accepted only with usable

@@ -89,6 +89,13 @@ test_that("retries require usable inference and a matching original likelihood",
     expect_identical(r$status, "unidentified")
     expect_identical(r$fit, original)
   }
+  # A boundary NB fit without a positive definite Hessian is not accepted; recovery goes on to retries
+  same <- original
+  calls <- 0L
+  r <- zi_inference_fit(original, function(...) { calls <<- calls + 1L; same }, c("groupB", "groupC"), 1e-3)
+  expect_identical(r$status, "unidentified")
+  expect_identical(r$fit, original)
+  expect_identical(calls, 3L)
   r <- zi_inference_fit(good, function(...) stop("should not refit"), c("groupB", "groupC"), 1e-3)
   expect_identical(r$status, "estimated")
   r <- zi_inference_fit(original, function(...) stop("fit failed"), c("groupB", "groupC"), 1e-3)

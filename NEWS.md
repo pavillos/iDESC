@@ -1,7 +1,8 @@
 # iDESC 0.4.0
 
 * Recover coefficient inference for `zi_model = "constant"` fits without a positive definite
-  Hessian or group standard errors. At the pi = 0 boundary, use the nested NB fit for
+  Hessian or group standard errors. At the pi = 0 boundary, use the nested NB fit (when it has
+  usable standard errors) for
   coefficients, Wald tests, pairwise contrasts, dispersion and subject variance; retain the
   original ZINB `Theta`. New `zi_boundary_tol` defaults to 1e-3 (twice the absolute likelihood
   difference). Otherwise retry ZINB from NB starting values, then with BFGS, accepting only

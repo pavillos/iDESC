@@ -15,7 +15,8 @@ zi_inference_fit <- function(original, fit, group_coefs, boundary_tol) {
   nb <- tryCatch(fit(zi = ~ 0, se = TRUE), error = function(e) NULL)
   if (is.null(nb) || !is.finite(ll(original)) || !is.finite(ll(nb))) return(out)
   # Absolute difference avoids declaring a substantially better NB fit a boundary solution.
-  if (2 * abs(ll(original) - ll(nb)) < boundary_tol) {
+  # An NB fit without usable inference would discard any SEs of the original fit: go on to retries.
+  if (2 * abs(ll(original) - ll(nb)) < boundary_tol && usable(nb)) {
     return(list(fit = nb, status = "boundary"))
   }
   start <- tryCatch({
